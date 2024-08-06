@@ -1,0 +1,149 @@
+﻿@page "/"
+
+@using System.Globalization
+@using CalculatingCryptoPortfolioValue.Client.Models
+@using CalculatingCryptoPortfolioValue.Client.Services
+
+@inject CalculatePortfolioService Calculator
+@inject IConfiguration Configuration
+@inject ILogger<Home> Logger
+
+<PageTitle>Home</PageTitle>
+
+<article>
+    <p>
+        <label for="portfolio" class="form-label">Choose a portfolio (.txt file)</label>
+        <InputFile id="portfolio" accept=".txt" OnChange="LoadFile"></InputFile>
+    </p>
+
+    @if (loading)
+    {
+        <p>
+            Loading...
+        </p>
+    }
+    else if (file is not null)
+    {
+        <p>
+            Initial portfolio value is @initialPortfolioValue
+        </p>
+    }
+
+    @if (loading)
+    {
+        <p>
+            Loading...
+        </p>
+    }
+    else if (file is not null)
+    {
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th scope="col">Coin</th>
+                    <th scope="col">Percentage Change</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var coin in coinPercentageChanges)
+                {
+                    <tr>
+                        <td>
+                            @coin.Name
+                        </td>
+                        <td>
+                            @if (!coin.IsIncreasing)
+                            {
+                                <text>-</text>
+                            }
+                            @(coin.PercentageChange)%
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    @if (loading)
+    {
+        <p>
+            Loading...
+        </p>
+    }
+    else if (file is not null)
+    {
+        <p>
+            Current portfolio value is @currentPortfolioValue
+        </p>
+        <p>
+            Overall portfolio change is @(overallPortfolioChange)%
+        </p>
+    }
+</article>
+
+@code {
+    private IBrowserFile? file;
+    private List<Coin> initialCoins = new();
+    private decimal? initialPortfolioValue;
+    private decimal? currentPortfolioValue;
+    private double? overallPortfolioChange;
+    private List<CoinPercentageChange> coinPercentageChanges = new();
+    private bool loading = false;
+    private Timer? timer;
+
+    private async Task LoadFile(InputFileChangeEventArgs e)
+    {
+        loading = true;
+        file = e.File;
+        initialCoins.Clear();
+
+        if (file.Size == 0)
+        {
+            file = null;
+            return;
+        }
+        //more file validations
+
+        using var reader = new StreamReader(file.OpenReadStream());
+
+        string? line;
+        string[]? separations;
+
+        while (true)
+        {
+            line = await reader.ReadLineAsync();
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                break;
+            }
+
+            separations = line.Split('|');
+
+            initialCoins.Add(new Coin(separations[1],
+                decimal.Parse(separations[0], CultureInfo.InvariantCulture),
+                decimal.Parse(separations[2], CultureInfo.InvariantCulture)));
+        }
+
+        Logger.LogInformation("File loaded");
+
+        if (initialCoins.Any())
+        {
+            await Calculator.SetCoinsIds(initialCoins);
+            initialPortfolioValue = Calculator.InitialPortfolioValue(initialCoins);
+
+            timer = new System.Threading.Timer(async _ =>
+            {
+                currentPortfolioValue = await Calculator.CurrentPortfolioValue(initialCoins);
+                coinPercentageChanges = await Calculator.PercentageChangePerCoin(initialCoins);
+                overallPortfolioChange = Calculator.OverallPortfolioChange(initialPortfolioValue, currentPortfolioValue);
+
+                await InvokeAsync(StateHasChanged);
+
+                Logger.LogInformation("Refreshed page");
+
+            }, null, 0, int.Parse(Configuration["refreshMiliseconds"]!));
+
+            loading = false;
+        }
+    }
+}
